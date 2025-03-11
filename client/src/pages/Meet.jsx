@@ -87,11 +87,12 @@ const Meet = ({ socket }) => {
   };
 
   const handleIncommingCall = (data) => {
+    console.log("📩 Incoming call from", data.from);
+    console.log("🔗 Received Signal:", data.signal);
     setReceivingCall(true);
     setCallerName(data.name);
     setCallerSignal(data.signal);
     setCallerId(data.from);
-    console.log("Receiving call from ", data.from);
   };
 
   const acceptCall = () => {
@@ -124,7 +125,22 @@ const Meet = ({ socket }) => {
       return;
     }
 
-    const pr = new Peer({ initiator: true, trickle: false, stream });
+    const pr = new Peer({
+      initiator: true,
+      trickle: false,
+      stream,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" }, // Free STUN server
+          { urls: "stun:stun1.l.google.com:19302" },
+          {
+            urls: "turn:turn.anyfirewall.com:443?transport=tcp",
+            username: "webrtc",
+            credential: "webrtc",
+          }, // Example TURN server
+        ],
+      },
+    });
     pr.on("signal", (data) => {
       console.log("Sending signal data:", data);
       socket.emit("initiateCall", {
@@ -147,6 +163,19 @@ const Meet = ({ socket }) => {
       setCallAccepted(true);
       setCallerName(data.name);
     });
+
+    pr.on("connect", () => {
+      console.log("✅ WebRTC Connection Established!");
+    });
+    
+    pr.on("error", (err) => {
+      console.error("❌ WebRTC Error:", err);
+    });
+    
+    pr.on("close", () => {
+      console.warn("🔴 WebRTC Connection Closed!");
+    });
+    
 
     connectionRef.current = pr;
   };
@@ -205,7 +234,7 @@ const Meet = ({ socket }) => {
                   />
                 </button>
                 <button className="text-error">
-                  <LogOut onClick={endCall}/>
+                  <LogOut onClick={endCall} />
                 </button>
               </div>
             </div>
