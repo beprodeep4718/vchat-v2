@@ -277,7 +277,6 @@ const Meet = ({ socket }) => {
           ref={myVideoRef}
           autoPlay
           playsInline
-          muted
           className="w-1/2 h-[300px] bg-base-300 rounded-lg scale-x-[-1]"
         ></video>
         <video
