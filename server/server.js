@@ -24,9 +24,11 @@ app.get("*", (_, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL, // Adjust this based on your frontend URL
+    origin: "*", // Be more permissive during testing, restrict later
     methods: ["GET", "POST"],
+    credentials: true
   },
+  transports: ['websocket', 'polling'] // Ensure all transport methods are available
 });
 
 io.on("connection", (socket) => {
@@ -47,6 +49,17 @@ io.on("connection", (socket) => {
   socket.on("callDeclined", ({ to }) => {
     io.to(to).emit("callDeclined");
   });
+  
+  // Add handler for ICE candidates
+  socket.on("ice-candidate", ({ to, candidate, from }) => {
+    io.to(to).emit("ice-candidate", { candidate, from });
+  });
+  
+  // Handle call ending
+  socket.on("call:end", ({ to, from, name }) => {
+    io.to(to).emit("callEnded", { from, name });
+  });
+  
   socket.on("disconnect", () => {
     console.log("user disconnected", socket.id);
   });

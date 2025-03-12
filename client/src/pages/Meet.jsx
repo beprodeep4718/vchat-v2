@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { UserPlus, Mic, Video, LogOut } from "lucide-react";
-import Peer from "simple-peer/simplepeer.min.js";
 
 import Model from "../components/Model";
 import Comms from "../components/Comms";
@@ -50,14 +49,31 @@ const Meet = ({ socket }) => {
       document.getElementById("my_modal_1").showModal();
     }
     getMedia();
+
+    // More robust socket connection
+    socket.io.opts.transports = ["websocket", "polling"];
     socket.connect();
+
+    socket.io.on("error", (error) => {
+      console.error("Socket.IO error:", error);
+    });
+
+    socket.io.on("reconnect_attempt", () => {
+      console.log("Socket.IO reconnecting...");
+    });
 
     socket.on("connect", handleConnection);
     socket.on("incommingCall", handleIncommingCall);
+    socket.on("ice-candidate", handleIceCandidate);
+
     return () => {
+      if (connectionRef.current) {
+        connectionRef.current.close();
+      }
       socket.disconnect();
       socket.off("connect", handleConnection);
       socket.off("incommingCall", handleIncommingCall);
+      socket.off("ice-candidate", handleIceCandidate);
     };
   }, []);
 
@@ -86,7 +102,74 @@ const Meet = ({ socket }) => {
     setMySocketId(socketId);
   };
 
-  const handleIncommingCall = (data) => {
+  const createPeerConnection = () => {
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun3.l.google.com:19302" },
+        { urls: "stun:stun4.l.google.com:19302" },
+        {
+          urls: "turn:turn.anyfirewall.com:443?transport=tcp",
+          username: "webrtc",
+          credential: "webrtc",
+        },
+      ],
+    });
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log("Sending ICE candidate:", event.candidate);
+        const recipientId = id === "initiator" ? callerId : id;
+        socket.emit("ice-candidate", {
+          to: recipientId,
+          candidate: event.candidate,
+          from: mySocketId,
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      console.log("Received track:", event.streams[0]);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    pc.onconnectionstatechange = (event) => {
+      console.log("Connection state change:", pc.connectionState);
+    };
+
+    pc.oniceconnectionstatechange = (event) => {
+      console.log("ICE Connection state change:", pc.iceConnectionState);
+    };
+
+    // Add local stream tracks to peer connection
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+      });
+    } else {
+      console.error("No local stream available to add to peer connection");
+    }
+
+    return pc;
+  };
+
+  const handleIceCandidate = async ({ candidate, from }) => {
+    console.log("Received ICE candidate from", from);
+    if (connectionRef.current && candidate) {
+      try {
+        await connectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log("Added ICE candidate successfully");
+      } catch (error) {
+        console.error("Error adding ICE candidate:", error);
+      }
+    }
+  };
+
+  const handleIncommingCall = async (data) => {
     console.log("📩 Incoming call from", data.from);
     console.log("🔗 Received Signal:", data.signal);
     setReceivingCall(true);
@@ -95,98 +178,88 @@ const Meet = ({ socket }) => {
     setCallerId(data.from);
   };
 
-  const acceptCall = () => {
-    setCallAccepted(true);
-    setReceivingCall(false);
-    const pr = new Peer({ initiator: false, trickle: false, stream });
-    pr.on("signal", (data) => {
-      console.log("Sending signal data:", data);
+  const acceptCall = async () => {
+    try {
+      setCallAccepted(true);
+      setReceivingCall(false);
+      
+      const pc = createPeerConnection();
+      connectionRef.current = pc;
+      
+      // Set the remote description with the offer received
+      await pc.setRemoteDescription(new RTCSessionDescription(callerSignal));
+      
+      // Create answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      
+      // Send the answer to the caller
       socket.emit("acceptCall", {
-        signalData: data,
+        signalData: pc.localDescription,
         to: callerId,
         name: myName,
       });
-    });
-    pr.on("stream", (remoteStream) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-    });
-    pr.signal(callerSignal);
-    connectionRef.current = pr;
+      
+      console.log("Call accepted and answer sent");
+    } catch (error) {
+      console.error("Error accepting call:", error);
+    }
   };
 
-  const initiateCall = () => {
+  const initiateCall = async () => {
     console.log("Calling to", id);
     console.log("Current stream:", stream);
 
     if (!stream) {
-      console.error("Stream is null! Cannot create peer.");
+      console.error("Stream is null! Cannot create peer connection.");
       return;
     }
-
-    const pr = new Peer({
-      initiator: true,
-      trickle: false,
-      stream,
-      config: {
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" }, // Free STUN server
-          { urls: "stun:stun1.l.google.com:19302" },
-          {
-            urls: "turn:turn.anyfirewall.com:443?transport=tcp",
-            username: "webrtc",
-            credential: "webrtc",
-          }, // Example TURN server
-        ],
-      },
-    });
-    pr.on("signal", (data) => {
-      console.log("Sending signal data:", data);
+    
+    try {
+      const pc = createPeerConnection();
+      connectionRef.current = pc;
+      
+      // Create offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      console.log("Sending call to:", id);
       socket.emit("initiateCall", {
         userToCall: id,
-        signalData: data,
+        signalData: pc.localDescription,
         from: mySocketId,
         name: myName,
       });
-    });
-
-    pr.on("stream", (remoteStream) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-    });
-
-    socket.on("callAccepted", (data) => {
-      console.log("Call accepted:", data);
-      pr.signal(data.signal);
-      setCallAccepted(true);
-      setCallerName(data.name);
-    });
-
-    pr.on("connect", () => {
-      console.log("✅ WebRTC Connection Established!");
-    });
-    
-    pr.on("error", (err) => {
-      console.error("❌ WebRTC Error:", err);
-    });
-    
-    pr.on("close", () => {
-      console.warn("🔴 WebRTC Connection Closed!");
-    });
-    
-
-    connectionRef.current = pr;
+      
+      socket.on("callAccepted", async (data) => {
+        console.log("Call accepted:", data);
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.signal));
+          setCallAccepted(true);
+          setCallerName(data.name);
+          console.log("Remote description set successfully");
+        } catch (error) {
+          console.error("Error setting remote description:", error);
+        }
+      });
+      
+    } catch (error) {
+      console.error("Error initiating call:", error);
+    }
   };
 
   const endCall = () => {
     const to = id === "initiator" ? callerId : id;
     socket.emit("call:end", { to, from: mySocketId, name: myName });
     setCallEnded(true);
-    connectionRef.current?.destroy();
+    
+    if (connectionRef.current) {
+      connectionRef.current.close();
+    }
+    
     setCallAction("call_terminated");
   };
+  
   const toggleMic = () => {
     setMicOn((prev) => !prev);
     stream.getAudioTracks()[0].enabled = !micOn;
