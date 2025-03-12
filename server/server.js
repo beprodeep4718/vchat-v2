@@ -1,13 +1,26 @@
-require("dotenv").config();
-const express = require("express");
-const app = express();
-const http = require("http");
-const { Server } = require("socket.io");
-const cors = require("cors");
+import dotenv from "dotenv";
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 
+dotenv.config();
+const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+const __dirname = path.resolve();
+
+// ✅ Fix: Use __dirname for static files in ESM
+app.use(express.static(path.join(__dirname, "/client/dist")));
+app.get("*", (_, res) => {
+  res.sendFile(path.resolve(__dirname, "client", "dist", "index.html"));
+});
 
 const io = new Server(server, {
   cors: {
