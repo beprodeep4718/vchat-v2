@@ -291,6 +291,9 @@ const Meet = ({ socket }) => {
         <button className="badge badge-xl badge-primary badge-dash">
           {myName}
         </button>
+        {callerName && <button className="badge badge-xl badge-primary badge-dash">
+          {callerName}
+        </button>} 
         {
           // mic, video, end call
           callAccepted && !callEnded && (
