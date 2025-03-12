@@ -60,6 +60,15 @@ io.on("connection", (socket) => {
     io.to(to).emit("callEnded", { from, name });
   });
   
+  socket.on("renegotiate", ({ to, offer, from }) => {
+    console.log(`Renegotiation requested by ${from}`);
+    io.to(to).emit("renegotiate", { offer, from });
+  });
+  
+  socket.on("renegotiation-answer", ({ to, answer, from }) => {
+    console.log(`Renegotiation answer from ${from}`);
+    io.to(to).emit("renegotiation-answer", { answer, from });
+  });
   socket.on("disconnect", () => {
     console.log("user disconnected", socket.id);
   });

@@ -65,6 +65,31 @@ const Meet = ({ socket }) => {
     socket.on("connect", handleConnection);
     socket.on("incommingCall", handleIncommingCall);
     socket.on("ice-candidate", handleIceCandidate);
+    //new changes
+    socket.on("renegotiate", async ({ offer, from }) => {
+      console.log("Received renegotiation offer from", from);
+
+      if (connectionRef.current) {
+        await connectionRef.current.setRemoteDescription(
+          new RTCSessionDescription(offer)
+        );
+        const answer = await connectionRef.current.createAnswer();
+        await connectionRef.current.setLocalDescription(answer);
+        socket.emit("renegotiation-answer", {
+          to: from,
+          answer,
+          from: mySocketId,
+        });
+      }
+    });
+    socket.on("renegotiation-answer", async ({ answer }) => {
+      console.log("Received renegotiation answer");
+      if (connectionRef.current) {
+        await connectionRef.current.setRemoteDescription(
+          new RTCSessionDescription(answer)
+        );
+      }
+    });
 
     return () => {
       if (connectionRef.current) {
@@ -74,6 +99,8 @@ const Meet = ({ socket }) => {
       socket.off("connect", handleConnection);
       socket.off("incommingCall", handleIncommingCall);
       socket.off("ice-candidate", handleIceCandidate);
+      socket.off("renegotiate");
+      socket.off("renegotiation-answer");
     };
   }, []);
 
@@ -118,6 +145,19 @@ const Meet = ({ socket }) => {
       ],
     });
 
+    pc.onnegotiationneeded = async () => {
+      if (!id || !mySocketId) return;
+      console.log("Renegotiation needed... sending offer");
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("renegotiate", { to: id, offer, from: mySocketId });
+      } catch (error) {
+        console.error("Error during renegotiation:", error);
+      }
+    };
+
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         console.log("Sending ICE candidate:", event.candidate);
@@ -147,7 +187,7 @@ const Meet = ({ socket }) => {
 
     // Add local stream tracks to peer connection
     if (stream) {
-      stream.getTracks().forEach(track => {
+      stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
       });
     } else {
@@ -161,7 +201,9 @@ const Meet = ({ socket }) => {
     console.log("Received ICE candidate from", from);
     if (connectionRef.current && candidate) {
       try {
-        await connectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        await connectionRef.current.addIceCandidate(
+          new RTCIceCandidate(candidate)
+        );
         console.log("Added ICE candidate successfully");
       } catch (error) {
         console.error("Error adding ICE candidate:", error);
@@ -182,24 +224,24 @@ const Meet = ({ socket }) => {
     try {
       setCallAccepted(true);
       setReceivingCall(false);
-      
+
       const pc = createPeerConnection();
       connectionRef.current = pc;
-      
+
       // Set the remote description with the offer received
       await pc.setRemoteDescription(new RTCSessionDescription(callerSignal));
-      
+
       // Create answer
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      
+
       // Send the answer to the caller
       socket.emit("acceptCall", {
         signalData: pc.localDescription,
         to: callerId,
         name: myName,
       });
-      
+
       console.log("Call accepted and answer sent");
     } catch (error) {
       console.error("Error accepting call:", error);
@@ -214,15 +256,15 @@ const Meet = ({ socket }) => {
       console.error("Stream is null! Cannot create peer connection.");
       return;
     }
-    
+
     try {
       const pc = createPeerConnection();
       connectionRef.current = pc;
-      
+
       // Create offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      
+
       console.log("Sending call to:", id);
       socket.emit("initiateCall", {
         userToCall: id,
@@ -230,7 +272,7 @@ const Meet = ({ socket }) => {
         from: mySocketId,
         name: myName,
       });
-      
+
       socket.on("callAccepted", async (data) => {
         console.log("Call accepted:", data);
         try {
@@ -242,7 +284,6 @@ const Meet = ({ socket }) => {
           console.error("Error setting remote description:", error);
         }
       });
-      
     } catch (error) {
       console.error("Error initiating call:", error);
     }
@@ -252,14 +293,14 @@ const Meet = ({ socket }) => {
     const to = id === "initiator" ? callerId : id;
     socket.emit("call:end", { to, from: mySocketId, name: myName });
     setCallEnded(true);
-    
+
     if (connectionRef.current) {
       connectionRef.current.close();
     }
-    
+
     setCallAction("call_terminated");
   };
-  
+
   const toggleMic = () => {
     setMicOn((prev) => !prev);
     stream.getAudioTracks()[0].enabled = !micOn;
@@ -290,9 +331,7 @@ const Meet = ({ socket }) => {
         <button className="badge badge-xl badge-primary badge-dash">
           {myName}
         </button>
-        {callerName && <button className="badge badge-xl badge-primary badge-dash">
-          {callerName}
-        </button>} 
+
         {
           // mic, video, end call
           callAccepted && !callEnded && (
@@ -315,6 +354,13 @@ const Meet = ({ socket }) => {
             </div>
           )
         }
+        {callerName && (
+          <div className="flex items-center justify-end">
+            <button className="badge badge-xl badge-primary badge-dash">
+              {callerName}
+            </button>
+          </div>
+        )}
         {!(callAccepted && !callEnded) && (
           <div className="col-start-3 col-end-3 flex items-center justify-end">
             <div className="tooltip" data-tip="Copy invite link">
