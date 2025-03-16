@@ -2,7 +2,7 @@
 
 VeeChat is a real-time video chat application that allows users to create and join video meetings using WebRTC technology. The application provides a simple, user-friendly interface for peer-to-peer video communication.
 
-![VeeChat](https://via.placeholder.com/800x400?text=VeeChat+Screenshot)
+![VeeChat](https://github.com/user-attachments/assets/b0dcde33-54bf-4677-ac18-4a7ef67fc4be)
 
 ## Features
 
