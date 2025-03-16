@@ -74,6 +74,13 @@ io.on("connection", (socket) => {
   });
 });
 
+// The existing server.js code already handles all necessary events for SimplePeer:
+// - "initiateCall" to send an offer
+// - "acceptCall" to send an answer
+// - "call:end" to end the call
+// The only difference is that instead of RTCSessionDescription objects,
+// SimplePeer will send its own signal data format.
+
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {

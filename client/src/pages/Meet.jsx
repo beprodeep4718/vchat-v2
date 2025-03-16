@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { UserPlus, Mic, Video, LogOut } from "lucide-react";
+import SimplePeer from "simple-peer/simplepeer.min.js";
 
 import Model from "../components/Model";
 import Comms from "../components/Comms";
@@ -11,7 +12,7 @@ const Meet = ({ socket }) => {
 
   const myVideoRef = useRef();
   const remoteVideoRef = useRef();
-  const connectionRef = useRef();
+  const peerRef = useRef();
 
   const [myName, setMyName] = useState(location.state?.myName);
   const [stream, setStream] = useState(null);
@@ -64,54 +65,25 @@ const Meet = ({ socket }) => {
 
     socket.on("connect", handleConnection);
     socket.on("incommingCall", handleIncommingCall);
-    socket.on("ice-candidate", handleIceCandidate);
-    //new changes
-    socket.on("renegotiate", async ({ offer, from }) => {
-      console.log("Received renegotiation offer from", from);
-
-      if (connectionRef.current) {
-        await connectionRef.current.setRemoteDescription(
-          new RTCSessionDescription(offer)
-        );
-        const answer = await connectionRef.current.createAnswer();
-        await connectionRef.current.setLocalDescription(answer);
-        socket.emit("renegotiation-answer", {
-          to: from,
-          answer,
-          from: mySocketId,
-        });
-      }
-    });
-    socket.on("renegotiation-answer", async ({ answer }) => {
-      console.log("Received renegotiation answer");
-      if (connectionRef.current) {
-        await connectionRef.current.setRemoteDescription(
-          new RTCSessionDescription(answer)
-        );
-      }
-    });
+    socket.on("callAccepted", handleCallAccepted);
+    socket.on("callEnded", handleCallEnded);
 
     return () => {
-      if (connectionRef.current) {
-        connectionRef.current.close();
+      if (peerRef.current) {
+        peerRef.current.destroy();
       }
       socket.disconnect();
       socket.off("connect", handleConnection);
       socket.off("incommingCall", handleIncommingCall);
-      socket.off("ice-candidate", handleIceCandidate);
-      socket.off("renegotiate");
-      socket.off("renegotiation-answer");
+      socket.off("callAccepted", handleCallAccepted);
+      socket.off("callEnded", handleCallEnded);
     };
   }, []);
 
   useEffect(() => {
-    if (mySocketId && myName && id && id !== "initiator") {
+    if (mySocketId && myName && id && id !== "initiator" && stream) {
       console.log("Meeting ID:", id);
-      if (stream) {
-        initiateCall();
-      } else {
-        console.error("Stream is not available yet.");
-      }
+      initiateCall();
     }
   }, [myName, mySocketId, id, stream]);
 
@@ -129,88 +101,6 @@ const Meet = ({ socket }) => {
     setMySocketId(socketId);
   };
 
-  const createPeerConnection = () => {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" },
-        { urls: "stun:stun3.l.google.com:19302" },
-        { urls: "stun:stun4.l.google.com:19302" },
-        {
-          urls: "turn:turn.anyfirewall.com:443?transport=tcp",
-          username: "webrtc",
-          credential: "webrtc",
-        },
-      ],
-    });
-
-    pc.onnegotiationneeded = async () => {
-      if (!id || !mySocketId) return;
-      console.log("Renegotiation needed... sending offer");
-
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit("renegotiate", { to: id, offer, from: mySocketId });
-      } catch (error) {
-        console.error("Error during renegotiation:", error);
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("Sending ICE candidate:", event.candidate);
-        const recipientId = id === "initiator" ? callerId : id;
-        socket.emit("ice-candidate", {
-          to: recipientId,
-          candidate: event.candidate,
-          from: mySocketId,
-        });
-      }
-    };
-
-    pc.ontrack = (event) => {
-      console.log("Received track:", event.streams[0]);
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-      }
-    };
-
-    pc.onconnectionstatechange = (event) => {
-      console.log("Connection state change:", pc.connectionState);
-    };
-
-    pc.oniceconnectionstatechange = (event) => {
-      console.log("ICE Connection state change:", pc.iceConnectionState);
-    };
-
-    // Add local stream tracks to peer connection
-    if (stream) {
-      stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
-      });
-    } else {
-      console.error("No local stream available to add to peer connection");
-    }
-
-    return pc;
-  };
-
-  const handleIceCandidate = async ({ candidate, from }) => {
-    console.log("Received ICE candidate from", from);
-    if (connectionRef.current && candidate) {
-      try {
-        await connectionRef.current.addIceCandidate(
-          new RTCIceCandidate(candidate)
-        );
-        console.log("Added ICE candidate successfully");
-      } catch (error) {
-        console.error("Error adding ICE candidate:", error);
-      }
-    }
-  };
-
   const handleIncommingCall = async (data) => {
     console.log("📩 Incoming call from", data.from);
     console.log("🔗 Received Signal:", data.signal);
@@ -220,84 +110,119 @@ const Meet = ({ socket }) => {
     setCallerId(data.from);
   };
 
-  const acceptCall = async () => {
-    try {
-      setCallAccepted(true);
-      setReceivingCall(false);
-
-      const pc = createPeerConnection();
-      connectionRef.current = pc;
-
-      // Set the remote description with the offer received
-      await pc.setRemoteDescription(new RTCSessionDescription(callerSignal));
-
-      // Create answer
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      // Send the answer to the caller
-      socket.emit("acceptCall", {
-        signalData: pc.localDescription,
-        to: callerId,
-        name: myName,
-      });
-
-      console.log("Call accepted and answer sent");
-    } catch (error) {
-      console.error("Error accepting call:", error);
-    }
+  const handleCallAccepted = (data) => {
+    console.log("Call accepted:", data);
+    peerRef.current.signal(data.signal);
+    setCallAccepted(true);
+    setCallerName(data.name);
   };
 
-  const initiateCall = async () => {
-    console.log("Calling to", id);
-    console.log("Current stream:", stream);
+  const handleCallEnded = (data) => {
+    console.log("Call ended by", data.name);
+    if (peerRef.current) {
+      peerRef.current.destroy();
+    }
+    setCallEnded(true);
+    setCallAction("call_terminated");
+  };
 
+  const createPeer = (initiator, receiverId) => {
+    console.log("Creating peer, initiator:", initiator);
+    
+    const peer = new SimplePeer({
+      initiator,
+      stream,
+      trickle: false,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          { urls: "stun:stun2.l.google.com:19302" },
+          { urls: "stun:stun3.l.google.com:19302" },
+          { urls: "stun:stun4.l.google.com:19302" },
+          {
+            urls: "turn:turn.anyfirewall.com:443?transport=tcp",
+            username: "webrtc",
+            credential: "webrtc",
+          },
+        ],
+      }
+    });
+
+    peer.on("signal", (data) => {
+      console.log("Generated signal:", data);
+      
+      if (initiator) {
+        console.log("Sending call to:", receiverId);
+        socket.emit("initiateCall", {
+          userToCall: receiverId,
+          signalData: data,
+          from: mySocketId,
+          name: myName,
+        });
+      } else {
+        socket.emit("acceptCall", {
+          signalData: data,
+          to: callerId,
+          name: myName,
+        });
+      }
+    });
+
+    peer.on("stream", (remoteStream) => {
+      console.log("Received remote stream");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+      }
+    });
+
+    peer.on("error", (err) => {
+      console.error("Peer error:", err);
+    });
+
+    peer.on("close", () => {
+      console.log("Peer connection closed");
+    });
+
+    peer.on("connect", () => {
+      console.log("Peer connection established");
+    });
+
+    return peer;
+  };
+
+  const initiateCall = () => {
+    console.log("Initiating call to", id);
     if (!stream) {
       console.error("Stream is null! Cannot create peer connection.");
       return;
     }
 
-    try {
-      const pc = createPeerConnection();
-      connectionRef.current = pc;
+    const peer = createPeer(true, id);
+    peerRef.current = peer;
+  };
 
-      // Create offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+  const acceptCall = () => {
+    console.log("Accepting call from", callerId);
+    setCallAccepted(true);
+    setReceivingCall(false);
 
-      console.log("Sending call to:", id);
-      socket.emit("initiateCall", {
-        userToCall: id,
-        signalData: pc.localDescription,
-        from: mySocketId,
-        name: myName,
-      });
-
-      socket.on("callAccepted", async (data) => {
-        console.log("Call accepted:", data);
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.signal));
-          setCallAccepted(true);
-          setCallerName(data.name);
-          console.log("Remote description set successfully");
-        } catch (error) {
-          console.error("Error setting remote description:", error);
-        }
-      });
-    } catch (error) {
-      console.error("Error initiating call:", error);
-    }
+    const peer = createPeer(false);
+    peerRef.current = peer;
+    
+    // Signal the peer with caller's signal data
+    peer.signal(callerSignal);
   };
 
   const endCall = () => {
     const to = id === "initiator" ? callerId : id;
     socket.emit("call:end", { to, from: mySocketId, name: myName });
-    setCallEnded(true);
-
-    if (connectionRef.current) {
-      connectionRef.current.close();
+    
+    if (peerRef.current) {
+      peerRef.current.destroy();
     }
-
+    
+    setCallEnded(true);
     setCallAction("call_terminated");
   };
 
@@ -332,28 +257,25 @@ const Meet = ({ socket }) => {
           {myName}
         </button>
 
-        {
-          // mic, video, end call
-          callAccepted && !callEnded && (
-            <div className="flex items-center justify-center">
-              <div className="flex items-center justify-center gap-8 p-4 px-8 bg-neutral-content/5 backdrop-blur-lg rounded-lg shadow-[inset_0_0_0_1px_#ffffff1a]">
-                <button className="" onClick={toggleMic}>
-                  <Mic
-                    className={micOn ? "text-primary-content" : "text-error"}
-                  />
-                </button>
-                <button className="" onClick={toggleVideo}>
-                  <Video
-                    className={videoOn ? "text-primary-content" : "text-error"}
-                  />
-                </button>
-                <button className="text-error">
-                  <LogOut onClick={endCall} />
-                </button>
-              </div>
+        {callAccepted && !callEnded && (
+          <div className="flex items-center justify-center">
+            <div className="flex items-center justify-center gap-8 p-4 px-8 bg-neutral-content/5 backdrop-blur-lg rounded-lg shadow-[inset_0_0_0_1px_#ffffff1a]">
+              <button className="" onClick={toggleMic}>
+                <Mic
+                  className={micOn ? "text-primary-content" : "text-error"}
+                />
+              </button>
+              <button className="" onClick={toggleVideo}>
+                <Video
+                  className={videoOn ? "text-primary-content" : "text-error"}
+                />
+              </button>
+              <button className="text-error">
+                <LogOut onClick={endCall} />
+              </button>
             </div>
-          )
-        }
+          </div>
+        )}
         {callerName && (
           <div className="flex items-center justify-end">
             <button className="badge badge-xl badge-primary badge-dash">

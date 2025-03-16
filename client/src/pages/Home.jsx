@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import Model from "../components/Model";
+import { Camera } from 'lucide-react';
 
-const Home = ({socket}) => {
+const Home = ({ socket }) => {
   const [action, setAction] = useState(null);
   const handleAction = (action) => {
     setAction(action);
@@ -10,6 +11,9 @@ const Home = ({socket}) => {
 
   return (
     <div className="w-full h-screen flex justify-center items-center">
+      <div className="navbar fixed top-0 left-0 bg-base-100">
+        <a className="btn btn-ghost text-xl"><Camera className="text-primary" />VeeChat</a>
+      </div>
       <div className="card-cont flex gap-2 flex-wrap justify-center items-center">
         <div className="card card-border bg-base-200 w-96">
           <div className="card-body">
